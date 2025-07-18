@@ -5,7 +5,7 @@ import sys
 from collections import deque
 from threading import Lock
 from dataclasses import dataclass
-from typing import Tuple
+from typing import Tuple, Optional, Dict, Any, List, Deque
 
 import cv2
 import numpy as np
@@ -57,12 +57,12 @@ class PoseViewer:
 
     def __init__(
         self,
-        model_path,
-        target_fps=60,
-        window_name="Fast Pose",
-        queue_maxsize=2,
-        config=None,
-    ):
+        model_path: str,
+        target_fps: int = 60,
+        window_name: str = "Fast Pose",
+        queue_maxsize: int = 2,
+        config: Optional[PoseViewerConfig] = None,
+    ) -> None:
         """
         Initialize the PoseViewer.
 
@@ -79,10 +79,12 @@ class PoseViewer:
         self.queue_maxsize = queue_maxsize
         self.config = config or PoseViewerConfig()
         self.font = cv2.FONT_HERSHEY_SIMPLEX
-        self.disp_queue = deque(maxlen=queue_maxsize)
+        self.disp_queue: Deque[Tuple[np.ndarray, Optional[Any], float]] = deque(
+            maxlen=queue_maxsize
+        )
         self._queue_lock = Lock()
-        self.text_cache = {}
-        self.target_markers = {
+        self.text_cache: Dict[str, Tuple[int, int]] = {}
+        self.target_markers: Dict[int, str] = {
             23: "L_Hip",
             24: "R_Hip",
             25: "L_Knee",
@@ -90,7 +92,7 @@ class PoseViewer:
             27: "L_Ankle",
             28: "R_Ankle",
         }
-        self.leg_connections = [
+        self.leg_connections: List[Tuple[int, int]] = [
             (23, 25),
             (25, 27),
             (24, 26),
@@ -103,7 +105,7 @@ class PoseViewer:
 
         logger.info("PoseViewer initialized successfully")
 
-    def _setup_mediapipe(self):
+    def _setup_mediapipe(self) -> None:
         """
         Initialize the MediaPipe pose landmarker.
 
@@ -135,7 +137,7 @@ class PoseViewer:
             logger.error("Failed to initialize MediaPipe pose landmarker: %s", e)
             raise
 
-    def _setup_window(self):
+    def _setup_window(self) -> None:
         """
         Set up the OpenCV window for displaying the video feed.
 
@@ -150,7 +152,7 @@ class PoseViewer:
             self.window_name, self.config.display_width, self.config.display_height
         )
 
-    def _setup_signal_handlers(self):
+    def _setup_signal_handlers(self) -> None:
         """
         Configure signal handlers for graceful shutdown.
 
@@ -165,7 +167,7 @@ class PoseViewer:
         This method is called at initialization time.
         """
 
-        def signal_handler(signum, frame):
+        def signal_handler(signum: int, frame: Any) -> None:
             """
             Signal handler for SIGINT, SIGTERM, SIGHUP, and SIGQUIT.
 
@@ -192,7 +194,9 @@ class PoseViewer:
 
         logger.debug("Signal handlers configured for graceful shutdown")
 
-    def _draw_text_block(self, img, text, pos):
+    def _draw_text_block(
+        self, img: np.ndarray, text: str, pos: Tuple[int, int]
+    ) -> None:
         """
         Draw text with a background rectangle at the specified position.
 
@@ -228,7 +232,7 @@ class PoseViewer:
             self.config.font_thickness,
         )
 
-    def _draw_log(self, img, fps):
+    def _draw_log(self, img: np.ndarray, fps: float) -> None:
         """
         Draw some basic logging information on the frame.
 
@@ -251,7 +255,7 @@ class PoseViewer:
             y = self.config.margin + i * self.config.line_height
             self._draw_text_block(img, text, (x, y))
 
-    def _draw_markers_readout(self, img, pose):
+    def _draw_markers_readout(self, img: np.ndarray, pose: Any) -> None:
         """
         Draw text blocks with information about the detected pose landmarks.
 
@@ -301,7 +305,9 @@ class PoseViewer:
                 self._draw_text_block(img, text, (self.config.margin, y_pos))
                 line_idx += 1
 
-    def _draw_pose_annotations(self, frame, pose):
+    def _draw_pose_annotations(
+        self, frame: np.ndarray, pose: Optional[Any]
+    ) -> np.ndarray:
         """
         Draw the pose annotations on the given frame.
 
@@ -353,7 +359,9 @@ class PoseViewer:
 
         return self._draw_pose_annotations_manual(frame, pose)
 
-    def _draw_pose_annotations_manual(self, frame, pose):
+    def _draw_pose_annotations_manual(
+        self, frame: np.ndarray, pose: Optional[Any]
+    ) -> np.ndarray:
         """
         Draw pose annotations manually (legs only).
 
@@ -417,7 +425,7 @@ class PoseViewer:
 
         return frame
 
-    def _on_result(self, result, mp_image: mp.Image, timestamp_ms: int):
+    def _on_result(self, result: Any, mp_image: mp.Image, timestamp_ms: int) -> None:
         """
         Callback to handle pose landmark detection results from the pose landmarker.
 
@@ -480,7 +488,7 @@ class PoseViewer:
                     "Fallback frame processing also failed: %s", fallback_error
                 )
 
-    def _cleanup(self, cap=None):
+    def _cleanup(self, cap: Optional[cv2.VideoCapture] = None) -> None:
         """
         Clean up resources including MediaPipe landmarker, camera, and OpenCV windows.
 
@@ -511,7 +519,7 @@ class PoseViewer:
 
         logger.info("Cleanup completed successfully")
 
-    def _init_camera(self):
+    def _init_camera(self) -> cv2.VideoCapture:
         """
         Initialize the camera with specified properties.
 
@@ -548,7 +556,7 @@ class PoseViewer:
 
         return cap
 
-    def _handle_frame(self, frame, state):
+    def _handle_frame(self, frame: np.ndarray, state: Dict[str, Any]) -> None:
         """
         Handle a single frame: run pose detection if needed and process queue.
 
@@ -629,7 +637,7 @@ class PoseViewer:
         except (OSError, RuntimeError) as e:
             logger.error("Error processing display queue: %s", e)
 
-    def _draw_and_show(self, frame, state):
+    def _draw_and_show(self, frame: np.ndarray, state: Dict[str, Any]) -> bool:
         """
         Draw the final display and show it in the window.
 
@@ -686,7 +694,7 @@ class PoseViewer:
             logger.error("Error in display operations: %s", e)
             return True
 
-    def run(self):
+    def run(self) -> None:
         """
         Main execution loop for the pose detection application.
 
@@ -698,7 +706,7 @@ class PoseViewer:
         try:
             cap = self._init_camera()
 
-            state = {
+            state: Dict[str, Any] = {
                 "last_display_ts": time.monotonic(),
                 "last_detect_ts": 0.0,
                 "target_detect_interval": 1.0 / self.target_fps,
