@@ -35,10 +35,10 @@ class PoseViewerConfig:
     connection_thickness: int = 6
     text_background_padding: int = 2
 
-    font_scale: float = 0.5
+    font_scale: float = 0.35
     font_thickness: int = 1
-    line_height: int = 30
-    margin: int = 50
+    line_height: int = 15
+    margin: int = 25
 
     camera_buffer_size: int = 1
     frame_summary_interval: int = 30
@@ -46,6 +46,8 @@ class PoseViewerConfig:
 
     fps_smoothing_alpha: float = 0.9
     visibility_threshold: float = 0.5
+
+    draw_full_pose: bool = False
 
 
 class PoseViewer:
@@ -102,7 +104,20 @@ class PoseViewer:
         logger.info("PoseViewer initialized successfully")
 
     def _setup_mediapipe(self):
-        """Initialize MediaPipe pose landmarker."""
+        """
+        Initialize the MediaPipe pose landmarker.
+
+        Sets up the MediaPipe pose landmarker based on the model path
+        provided at initialization. The result callback is set to
+        _on_result, and the running mode is set to VisionRunningMode.LIVE_STREAM.
+        After initialization, the landmarker is stored in the instance
+        variable self.landmarker.
+
+        Raises:
+            OSError
+            ValueError
+            RuntimeError
+        """
         try:
             BaseOptions = mp.tasks.BaseOptions
             PoseLandmarker = mp.tasks.vision.PoseLandmarker
@@ -121,17 +136,48 @@ class PoseViewer:
             raise
 
     def _setup_window(self):
-        """Setup the display window."""
+        """
+        Set up the OpenCV window for displaying the video feed.
+
+        Initializes a named window with normal properties and resizes it
+        to the dimensions specified in the configuration.
+
+        Raises:
+            cv2.error: If there is an issue creating or resizing the window.
+        """
         cv2.namedWindow(self.window_name, cv2.WINDOW_NORMAL)
         cv2.resizeWindow(
             self.window_name, self.config.display_width, self.config.display_height
         )
 
     def _setup_signal_handlers(self):
-        """Setup signal handlers for graceful shutdown."""
+        """
+        Configure signal handlers for graceful shutdown.
+
+        This method configures the signal handlers for SIGINT, SIGTERM, SIGHUP,
+        and SIGQUIT to call the _cleanup method and exit the process when
+        received. This allows the application to clean up resources when
+        terminated.
+
+        The signal handlers all call _cleanup, which handles releasing the
+        camera and destroying any OpenCV windows, before exiting the process.
+
+        This method is called at initialization time.
+        """
 
         def signal_handler(signum, frame):
-            """Handle termination signals."""
+            """
+            Signal handler for SIGINT, SIGTERM, SIGHUP, and SIGQUIT.
+
+            This function is called when one of the above signals is received.
+            It initiates a graceful shutdown by calling _cleanup to release
+            resources such as the camera and any OpenCV windows, and then exits
+            the process using sys.exit(0).
+
+            Args:
+                signum: The signal number received
+                frame: The current stack frame (unused)
+            """
             logger.info("Received signal %s, initiating graceful shutdown", signum)
             self._cleanup()
             sys.exit(0)
@@ -202,42 +248,114 @@ class PoseViewer:
                 tw, th = self.text_cache[text]
 
             x = w - tw - self.config.margin
-            y = self.config.margin + (i + 1) * self.config.line_height
+            y = self.config.margin + i * self.config.line_height
             self._draw_text_block(img, text, (x, y))
 
     def _draw_markers_readout(self, img, pose):
         """
-        Draw the 2D coordinates and visibility values of
-        the six pose markers on the output image.
+        Draw text blocks with information about the detected pose landmarks.
 
         Args:
-            img: The output image to draw on.
+            img: The frame to draw on.
             pose: The pose data to draw from.
+
+        Notes:
+            If `draw_full_pose` is `True`, draws information for all detected
+            landmarks. Otherwise, draws information only for the subset of
+            landmarks in `target_markers`.
         """
         h, w, _ = img.shape
-
         line_idx = 0
-        for i in (23, 24, 25, 26, 27, 28):
-            if i >= len(pose):
-                continue
 
-            lm = pose[i]
-            if lm.visibility < self.config.visibility_threshold:
-                continue
+        if self.config.draw_full_pose:
+            for idx, lm in enumerate(pose):
+                if lm.visibility < self.config.visibility_threshold:
+                    continue
 
-            x_norm, y_norm = lm.x, lm.y
-            x_px, y_px = int(x_norm * w), int(y_norm * h)
-            visibility = lm.visibility
+                x_norm, y_norm = lm.x, lm.y
+                x_px, y_px = int(x_norm * w), int(y_norm * h)
+                visibility = lm.visibility
 
-            text = f"{self.target_markers[i]}: ({x_norm:.3f},{y_norm:.3f}) [{x_px},{y_px}] vis:{visibility:.2f}"
-            y_pos = self.config.margin + line_idx * self.config.line_height
+                name = mp.solutions.pose.PoseLandmark(idx).name
 
-            self._draw_text_block(img, text, (self.config.margin, y_pos))
-            line_idx += 1
+                text = f"{name}: ({x_norm:.3f},{y_norm:.3f})  px[{x_px},{y_px}]  vis:{visibility:.2f}"
+                y_pos = self.config.margin + line_idx * self.config.line_height
+
+                self._draw_text_block(img, text, (self.config.margin, y_pos))
+                line_idx += 1
+        else:
+            for i, label in self.target_markers.items():
+                if i >= len(pose):
+                    continue
+                lm = pose[i]
+                if lm.visibility < self.config.visibility_threshold:
+                    continue
+
+                x_norm, y_norm = lm.x, lm.y
+                x_px, y_px = int(x_norm * w), int(y_norm * h)
+                visibility = lm.visibility
+
+                text = f"{label}: ({x_norm:.3f},{y_norm:.3f})  px[{x_px},{y_px}]  vis:{visibility:.2f}"
+                y_pos = self.config.margin + line_idx * self.config.line_height
+
+                self._draw_text_block(img, text, (self.config.margin, y_pos))
+                line_idx += 1
 
     def _draw_pose_annotations(self, frame, pose):
         """
-        Draw pose annotations on a frame.
+        Draw the pose annotations on the given frame.
+
+        Args:
+            frame: The frame to draw on.
+            pose: The pose data to draw from.
+
+        Returns:
+            The annotated frame.
+        """
+        if not pose:
+            return frame
+
+        h, w, _ = frame.shape
+
+        if self.config.draw_full_pose:
+            for idx, lm in enumerate(pose):
+                if lm.visibility < self.config.visibility_threshold:
+                    continue
+                x, y = int(lm.x * w), int(lm.y * h)
+                if 0 <= x < w and 0 <= y < h:
+                    cv2.circle(
+                        frame,
+                        (x, y),
+                        self.config.marker_radius,
+                        self.config.marker_color,
+                        cv2.FILLED,
+                    )
+
+            for si, ei in mp.solutions.pose.POSE_CONNECTIONS:
+                lm1 = pose[si]
+                lm2 = pose[ei]
+                if (
+                    lm1.visibility < self.config.visibility_threshold
+                    or lm2.visibility < self.config.visibility_threshold
+                ):
+                    continue
+                x1, y1 = int(lm1.x * w), int(lm1.y * h)
+                x2, y2 = int(lm2.x * w), int(lm2.y * h)
+                if 0 <= x1 < w and 0 <= y1 < h and 0 <= x2 < w and 0 <= y2 < h:
+                    cv2.line(
+                        frame,
+                        (x1, y1),
+                        (x2, y2),
+                        self.config.connection_color,
+                        self.config.connection_thickness,
+                    )
+            return frame
+
+        return self._draw_pose_annotations_manual(frame, pose)
+
+    def _draw_pose_annotations_manual(self, frame, pose):
+        """
+        Draw pose annotations manually (legs only).
 
         Args:
             frame: The frame to draw on.
@@ -539,14 +657,12 @@ class PoseViewer:
                 )
             prep_time = time.perf_counter() - prep_start
 
-            # Measure actual display time
             show_start = time.perf_counter()
             cv2.imshow(self.window_name, display)
             show_time = time.perf_counter() - show_start
 
-            # Measure key check time
             key_start = time.perf_counter()
-            key_result = cv2.waitKey(1) & 0xFF == 27  # ESC key
+            key_result = cv2.waitKey(1) & 0xFF == 27
             key_time = time.perf_counter() - key_start
 
             total_display_time = time.perf_counter() - display_start
