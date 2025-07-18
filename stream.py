@@ -42,6 +42,13 @@ LEG_CONNECTIONS = [
 
 
 def draw_log(img, fps):
+    """
+    Draw some basic logging information on the frame.
+
+    Args:
+        img: The frame to draw on.
+        fps: The current frames per second.
+    """
     _cv2_rectangle = cv2.rectangle
     _cv2_putText = cv2.putText
     _cv2_getTextSize = cv2.getTextSize
@@ -73,8 +80,8 @@ def draw_log(img, fps):
 
 def draw_markers_readout(img, pose):
     """
-    Draw the 2D coordinates and visibility values of the six pose markers
-    (L/R Hip, Knee, Ankle) on the output image.
+    Draw the 2D coordinates and visibility values of
+    the six pose markers on the output image.
 
     Args:
         img: The output image to draw on.
@@ -130,7 +137,16 @@ def draw_markers_readout(img, pose):
 
 
 def draw_pose_annotations(frame, pose):
-    """Draw pose landmarks and connections on the frame"""
+    """
+    Draw pose annotations on a frame.
+
+    Args:
+        frame: The frame to draw on.
+        pose: The pose data to draw from.
+
+    Returns:
+        The annotated frame.
+    """
     if not pose:
         return frame
 
@@ -160,6 +176,18 @@ def draw_pose_annotations(frame, pose):
 
 
 def on_result(result, mp_image: mp.Image, timestamp_ms: int):
+    """
+    Callback to handle pose landmark detection results from the pose landmarker.
+
+    Args:
+        result: The pose landmark detection result from the pose landmarker.
+        mp_image: The Mediapipe image frame that the pose landmarker processed.
+        timestamp_ms: The timestamp of the frame in milliseconds.
+
+    This callback takes the results from the pose landmarker and puts them into
+    the display queue for the main thread to consume. If the queue is full, it
+    will attempt to discard the oldest frame in the queue.
+    """
     frame = cv2.cvtColor(mp_image.numpy_view(), cv2.COLOR_RGB2BGR)
     pose = result.pose_landmarks[0] if result.pose_landmarks else None
 
@@ -172,6 +200,16 @@ def on_result(result, mp_image: mp.Image, timestamp_ms: int):
 
 
 def main():
+    """
+    Initializes the pose landmarker, sets up the display window, and starts
+    the main loop. The main loop reads frames from the webcam, runs pose
+    landmark detection on them, and displays the annotated result.
+
+    The main loop also calculates the current FPS and displays it in the
+    top-left corner of the window.
+
+    The application exits when the user presses the 'Esc' key.
+    """
     cap = cv2.VideoCapture(0)
     if not cap.isOpened():
         raise RuntimeError("Cannot open webcam")
