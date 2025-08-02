@@ -5,7 +5,7 @@ import sys
 from collections import deque
 from threading import Lock
 from dataclasses import dataclass
-from typing import Tuple, Optional, Dict, Any, List, Deque
+from typing import Tuple, Optional, Dict, Any, List, Deque, Union
 
 import cv2
 import numpy as np
@@ -48,6 +48,8 @@ class PoseViewerConfig:
     visibility_threshold: float = 0.5
 
     draw_full_pose: bool = False
+    camera_source: str = "0"
+    show_info_overlay: bool = True
 
 
 class PoseViewer:
@@ -529,12 +531,23 @@ class PoseViewer:
         Raises:
             RuntimeError: If camera cannot be opened
         """
-        cap = cv2.VideoCapture(0)
+        try:
+            camera_source: Union[int, str] = int(self.config.camera_source)
+            logger.info("Using camera device index: %d", camera_source)
+            cap = cv2.VideoCapture(camera_source, cv2.CAP_AVFOUNDATION)
+        except ValueError:
+            camera_source = self.config.camera_source
+            logger.info("Using camera URL: %s", camera_source)
+            cap = cv2.VideoCapture(camera_source)
+
         if not cap.isOpened():
             logger.error(
-                "Cannot open webcam - check if camera is connected and not in use"
+                "Cannot open camera source '%s' - check if camera is connected and not in use",
+                self.config.camera_source,
             )
-            raise RuntimeError("Cannot open webcam")
+            raise RuntimeError(
+                f"Cannot open camera source: {self.config.camera_source}"
+            )
 
         fps_set = cap.set(cv2.CAP_PROP_FPS, self.target_fps)
         width_set = cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.config.camera_width)
@@ -548,10 +561,11 @@ class PoseViewer:
         actual_width = cap.get(cv2.CAP_PROP_FRAME_WIDTH)
         actual_height = cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
         logger.info(
-            "Camera initialized: %dx%d @ %.1f FPS",
+            "Camera initialized: %dx%d @ %.1f FPS (source: %s)",
             int(actual_width),
             int(actual_height),
             actual_fps,
+            self.config.camera_source,
         )
 
         return cap
@@ -603,9 +617,10 @@ class PoseViewer:
                 annotate_time = time.perf_counter() - annotate_start
 
                 text_start = time.perf_counter()
-                self._draw_log(annotated_frame, state["last_fps"])
-                if pose:
-                    self._draw_markers_readout(annotated_frame, pose)
+                if self.config.show_info_overlay:
+                    self._draw_log(annotated_frame, state["last_fps"])
+                    if pose:
+                        self._draw_markers_readout(annotated_frame, pose)
                 text_time = time.perf_counter() - text_start
 
                 state["last_annotated"] = annotated_frame
