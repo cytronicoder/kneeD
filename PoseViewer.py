@@ -27,12 +27,12 @@ class PoseViewerConfig:
     camera_height: int = 480
 
     marker_color: Tuple[int, int, int] = (0, 0, 255)
-    connection_color: Tuple[int, int, int] = (0, 255, 0)
+    connection_color: Tuple[int, int, int] = (255, 255, 255)
     text_background_color: Tuple[int, int, int] = (0, 0, 0)
     text_color: Tuple[int, int, int] = (255, 255, 255)
 
-    marker_radius: int = 8
-    connection_thickness: int = 6
+    marker_radius: int = 4
+    connection_thickness: int = 2
     text_background_padding: int = 2
 
     font_scale: float = 0.35
