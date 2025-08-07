@@ -28,13 +28,38 @@ def main():
         action="store_true",
         help="Hide information overlays (FPS, coordinates)",
     )
+    parser.add_argument(
+        "--save-data",
+        action="store_true",
+        help="Enable data collection for biomechanical analysis",
+    )
+    parser.add_argument(
+        "--output-file",
+        type=str,
+        default="pose_data.csv",
+        help="Output CSV file for data collection (default: pose_data.csv)",
+    )
+    parser.add_argument(
+        "--detect-calibration",
+        action="store_true",
+        help="Enable automatic calibration grid detection (A4 paper with 1cm squares)",
+    )
+    parser.add_argument(
+        "--fps",
+        type=int,
+        default=60,
+        help="Target FPS for data collection (default: 60, set to 120 for research)",
+    )
     args = parser.parse_args()
 
     model_path = "model/pose_landmarker_full.task"
     config = PoseViewerConfig(
         draw_full_pose=args.full_pose,
         camera_source=args.source,
-        show_info_overlay=not args.no_info,  # Invert since --no-info hides overlays
+        show_info_overlay=not args.no_info,
+        save_data=args.save_data,
+        output_file=args.output_file,
+        detect_calibration=args.detect_calibration,
     )
 
     print(f"Starting pose detection with camera source: {args.source}")
@@ -48,7 +73,13 @@ def main():
     else:
         print("Information overlays enabled (FPS, coordinates)")
 
-    viewer = PoseViewer(model_path=model_path, config=config)
+    if args.save_data:
+        print(f"Data collection enabled → {args.output_file}")
+        if args.detect_calibration:
+            print("Calibration grid detection enabled")
+        print(f"Target FPS: {args.fps}")
+
+    viewer = PoseViewer(model_path=model_path, target_fps=args.fps, config=config)
     viewer.run()
 
 

@@ -2,9 +2,11 @@ import time
 import logging
 import signal
 import sys
+import csv
+import os
 from collections import deque
 from threading import Lock
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Tuple, Optional, Dict, Any, List, Deque, Union
 
 import cv2
@@ -50,6 +52,19 @@ class PoseViewerConfig:
     draw_full_pose: bool = False
     camera_source: str = "0"
     show_info_overlay: bool = True
+
+    save_data: bool = False
+    output_file: str = "pose_data.csv"
+    target_landmarks: List[int] = field(
+        default_factory=lambda: [23, 24, 25, 26, 27, 28]
+    )
+    min_confidence: float = 0.50
+    detect_calibration: bool = False
+    calibration_squares: Tuple[int, int] = (
+        21,
+        29,
+    )
+    calibration_square_size: float = 0.01
 
 
 class PoseViewer:
@@ -101,9 +116,18 @@ class PoseViewer:
             (26, 28),
             (23, 24),
         ]
+
+        self.csv_file = None
+        self.csv_writer = None
+        self.scale_factor: Optional[float] = None
+        self.data_buffer: List[Dict[str, Any]] = []
+
         self._setup_mediapipe()
         self._setup_window()
         self._setup_signal_handlers()
+
+        if self.config.save_data:
+            self._setup_data_collection()
 
         logger.info("PoseViewer initialized successfully")
 
@@ -195,6 +219,227 @@ class PoseViewer:
             signal.signal(signal.SIGQUIT, signal_handler)
 
         logger.debug("Signal handlers configured for graceful shutdown")
+
+    def _setup_data_collection(self) -> None:
+        """
+        Set up CSV data collection for biomechanical analysis.
+
+        Creates the output CSV file with headers for all target landmarks
+        and their coordinate/confidence data.
+        """
+        try:
+            output_dir = os.path.dirname(self.config.output_file)
+            if output_dir and not os.path.exists(output_dir):
+                os.makedirs(output_dir)
+
+            self.csv_file = open(self.config.output_file, "w", newline="")
+            self.csv_writer = csv.DictWriter(
+                self.csv_file, fieldnames=self._get_csv_headers()
+            )
+
+            self.csv_writer.writeheader()
+            logger.info("Data collection initialized: %s", self.config.output_file)
+        except (IOError, OSError) as e:
+            logger.error("Failed to initialize data collection: %s", e)
+            self.config.save_data = False
+            raise
+
+    def _get_csv_headers(self) -> List[str]:
+        """
+        Generate CSV headers for data collection.
+
+        Returns:
+            List of column names for the CSV file
+        """
+        headers = [
+            "frame_idx",
+            "timestamp",
+            "fps",
+            "scale_factor",
+            "calibration_detected",
+        ]
+
+        for landmark_idx in self.config.target_landmarks:
+            landmark_name = self.target_markers.get(
+                landmark_idx, f"landmark_{landmark_idx}"
+            )
+            headers.extend(
+                [
+                    f"{landmark_name}_x_norm",
+                    f"{landmark_name}_y_norm",
+                    f"{landmark_name}_x_px",
+                    f"{landmark_name}_y_px",
+                    f"{landmark_name}_confidence",
+                ]
+            )
+
+        headers.extend(
+            [
+                "shank_angle_left",
+                "shank_angle_right",
+                "hip_knee_ankle_angle_left",
+                "hip_knee_ankle_angle_right",
+            ]
+        )
+
+        return headers
+
+    def _detect_calibration_grid(
+        self, frame: np.ndarray
+    ) -> Tuple[bool, Optional[float]]:
+        """
+        Detect checkerboard pattern and calculate scale factor.
+
+        Args:
+            frame: Input frame to search for calibration pattern
+
+        Returns:
+            Tuple of (detection_success, scale_factor_in_meters_per_pixel)
+        """
+        if not self.config.detect_calibration:
+            return False, None
+
+        try:
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            ret, corners = cv2.findChessboardCorners(
+                gray,
+                self.config.calibration_squares,
+                cv2.CALIB_CB_ADAPTIVE_THRESH + cv2.CALIB_CB_NORMALIZE_IMAGE,
+            )
+
+            if ret and len(corners) >= self.config.calibration_squares[0]:
+                criteria = (
+                    cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER,
+                    30,
+                    0.001,
+                )
+                corners2 = cv2.cornerSubPix(gray, corners, (11, 11), (-1, -1), criteria)
+                distances = []
+
+                cols = self.config.calibration_squares[0]
+                for i in range(cols - 1):
+                    dist = np.linalg.norm(corners2[i + 1] - corners2[i])
+                    distances.append(dist)
+
+                rows = self.config.calibration_squares[1]
+                for i in range(0, (rows - 1) * cols, cols):
+                    if i + cols < len(corners2):
+                        dist = np.linalg.norm(corners2[i + cols] - corners2[i])
+                        distances.append(dist)
+
+                if distances:
+                    avg_square_size_px = np.mean(distances)
+                    scale_factor = (
+                        self.config.calibration_square_size / avg_square_size_px
+                    )
+
+                    logger.info(
+                        "Calibration grid detected: %.1f px/square → %.6f m/px",
+                        avg_square_size_px,
+                        scale_factor,
+                    )
+
+                    self.scale_factor = scale_factor
+                    return True, scale_factor
+        except (cv2.error, ValueError) as e:
+            logger.debug("Calibration detection error: %s", e)
+
+        return False, None
+
+    def _save_pose_data(
+        self, pose: Any, timestamp: float, frame_idx: int, frame: np.ndarray
+    ) -> None:
+        """
+        Save pose data for biomechanical analysis.
+
+        Args:
+            pose: MediaPipe pose landmarks
+            timestamp: Frame timestamp in seconds
+            frame_idx: Frame number
+            frame: Current frame for calibration detection
+        """
+        if not self.config.save_data or not self.csv_writer:
+            return
+
+        calibration_detected, detected_scale = self._detect_calibration_grid(frame)
+
+        data_row = {
+            "frame_idx": frame_idx,
+            "timestamp": timestamp,
+            "fps": self.target_fps,
+            "scale_factor": self.scale_factor,
+            "calibration_detected": calibration_detected,
+        }
+
+        if pose:
+            h, w = frame.shape[:2]
+
+            for landmark_idx in self.config.target_landmarks:
+                landmark_name = self.target_markers.get(
+                    landmark_idx, f"landmark_{landmark_idx}"
+                )
+
+                if landmark_idx < len(pose):
+                    lm = pose[landmark_idx]
+                    if lm.visibility >= self.config.min_confidence:
+                        data_row.update(
+                            {
+                                f"{landmark_name}_x_norm": lm.x,
+                                f"{landmark_name}_y_norm": lm.y,
+                                f"{landmark_name}_x_px": lm.x * w,
+                                f"{landmark_name}_y_px": lm.y * h,
+                                f"{landmark_name}_confidence": lm.visibility,
+                            }
+                        )
+                    else:
+                        data_row.update(
+                            {
+                                f"{landmark_name}_x_norm": np.nan,
+                                f"{landmark_name}_y_norm": np.nan,
+                                f"{landmark_name}_x_px": np.nan,
+                                f"{landmark_name}_y_px": np.nan,
+                                f"{landmark_name}_confidence": lm.visibility,
+                            }
+                        )
+                else:
+                    data_row.update(
+                        {
+                            f"{landmark_name}_x_norm": np.nan,
+                            f"{landmark_name}_y_norm": np.nan,
+                            f"{landmark_name}_x_px": np.nan,
+                            f"{landmark_name}_y_px": np.nan,
+                            f"{landmark_name}_confidence": 0.0,
+                        }
+                    )
+        else:
+            for landmark_idx in self.config.target_landmarks:
+                landmark_name = self.target_markers.get(
+                    landmark_idx, f"landmark_{landmark_idx}"
+                )
+                data_row.update(
+                    {
+                        f"{landmark_name}_x_norm": np.nan,
+                        f"{landmark_name}_y_norm": np.nan,
+                        f"{landmark_name}_x_px": np.nan,
+                        f"{landmark_name}_y_px": np.nan,
+                        f"{landmark_name}_confidence": 0.0,
+                    }
+                )
+
+        data_row.update(
+            {
+                "shank_angle_left": np.nan,
+                "shank_angle_right": np.nan,
+                "hip_knee_ankle_angle_left": np.nan,
+                "hip_knee_ankle_angle_right": np.nan,
+            }
+        )
+
+        try:
+            self.csv_writer.writerow(data_row)
+            self.csv_file.flush()
+        except (IOError, OSError) as e:
+            logger.error("Failed to write pose data: %s", e)
 
     def _draw_text_block(
         self, img: np.ndarray, text: str, pos: Tuple[int, int]
@@ -519,6 +764,13 @@ class PoseViewer:
         except AttributeError as e:
             logger.error("Error destroying windows: %s", e)
 
+        if self.csv_file is not None:
+            try:
+                self.csv_file.close()
+                logger.debug("Data collection file closed")
+            except (IOError, OSError) as e:
+                logger.error("Error closing data file: %s", e)
+
         logger.info("Cleanup completed successfully")
 
     def _init_camera(self) -> cv2.VideoCapture:
@@ -612,6 +864,9 @@ class PoseViewer:
             queue_time = time.perf_counter() - queue_start
 
             if frame_data is not None:
+                if self.config.save_data:
+                    self._save_pose_data(pose, ts, state["frame_idx"], frame_data)
+
                 annotate_start = time.perf_counter()
                 annotated_frame = self._draw_pose_annotations(frame_data, pose)
                 annotate_time = time.perf_counter() - annotate_start
